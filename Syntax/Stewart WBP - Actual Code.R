@@ -155,16 +155,10 @@ cohort_med_flag <- cohort_med_flag |>
 ## components (this allows for neater merging after the lines have been identified)
 test_df <- cohort_med_flag |> 
   group_by(patient_upi, new_regimen_name, new_regimen_start_date, new_regimen_latest_date, patient_date_of_death) |>
-  summarise(.groups = "drop") |> 
-  mutate(drug_list = strsplit(as.character(new_regimen_name), "\\s*\\+\\s*"),
-         drug_list = map(drug_list, ~ {
-           .x |> 
-             toupper() |> 
-             str_squish() |> 
-             str_trim()
-           })
-         ) |> 
-  arrange(patient_upi, new_regimen_start_date)
+  summarise() |> 
+  mutate(drug_list = strsplit(trimws(as.character(new_regimen_name)), "\\s*[\\+\\_]\\s*")) |> 
+  arrange(patient_upi, new_regimen_start_date) |> 
+  ungroup()
 
 
 ## List of rules which determine line of treatment groupings as agreed with Rhona
@@ -186,11 +180,11 @@ line_of_treatment_rules <- list(
   
   rule_no_new_drugs_under_180 <- function(current_line, next_regimen) {
     
-    next_drugs <- next_regimen$drugs[[1]]
+    next_drugs <- next_regimen$drug_list[[1]]
     if (length(next_drugs) == 0 || all(is.na(next_drugs))) return(FALSE)
     
     gap <- as.numeric(difftime(next_regimen$new_regimen_start_date, current_line$line_end, units = "days"))
-    no_new_drugs <- all(next_drugs %in% current_line$drugs)
+    no_new_drugs <- all(next_drugs %in% current_line$drug_list)
     
     return(no_new_drugs && gap < 180)
   }
@@ -217,7 +211,7 @@ evaluate_lines_of_treatment <- function(patient_data, rules) {
     line_number = 1,
     line_start = init_regimen$new_regimen_start_date,
     line_end = init_regimen$new_regimen_latest_date,
-    drugs = init_regimen$drugs[[1]]
+    drug_list = init_regimen$drug_list[[1]]
   )
   
   ### Function to process each regimen, applying the rules and updating the state
@@ -228,24 +222,24 @@ evaluate_lines_of_treatment <- function(patient_data, rules) {
     
     ### If any rule returns true, update the "state"
     if (combine_regimens) {
-      if (is.na(current_state$line_end) && is.na(next_regimen_df$end_date)) {
+      if (is.na(current_state$line_end) && is.na(next_regimen_df$new_regimen_latest_date)) {
         new_end <- NA_Date_
       } else {
-        new_end <- max(current_state$line_end, next_regimen_df$end_date, na.rm = TRUE)
+        new_end <- max(current_state$line_end, next_regimen_df$new_regimen_latest_date, na.rm = TRUE)
       }
       
       list(
         line_number = current_state$line_number,
         line_start = current_state$line_start,
         line_end = new_end,
-        drugs = unique(c(current_state$drugs, next_regimen_df$drugs[[1]]))
+        drug_list = unique(c(current_state$drug_list, next_regimen_df$drug_list[[1]]))
       )
     } else {
       list(
         line_number = current_state$line_number + 1,
         line_start = next_regimen_df$new_regimen_start_date,
         line_end = next_regimen_df$new_regimen_latest_date,
-        drugs = next_regimen_df$drugs[[1]]
+        drug_list = next_regimen_df$drug_list[[1]]
       )
     }
   }
@@ -270,7 +264,6 @@ evaluate_lines_of_treatment <- function(patient_data, rules) {
 
 
 test_lines <- test_df |>
-  filter(patient_upi == "0611450216") |> 
   group_by(patient_upi) |> 
   group_modify(~ evaluate_lines_of_treatment(.x, line_of_treatment_rules)) |> 
   ungroup()
