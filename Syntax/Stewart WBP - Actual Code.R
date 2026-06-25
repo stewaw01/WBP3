@@ -12,8 +12,8 @@ raw_pts <- read_rds("Cohort/Step_01_raw_pts.rds")
 n1 <- n_distinct(raw_pts$patient_upi) # 137
 
 
-# test <- raw_pts |> 
-#   mutate(patient_id = consecutive_id(patient_upi))
+raw_pts <- raw_pts |>
+  mutate(patient_upi = consecutive_id(patient_upi))
 
 ## Flag regimen intervals based on gap (if regimen_name differs)
 regimen_intervals <- raw_pts |> 
@@ -154,7 +154,7 @@ cohort_med_flag <- cohort_med_flag |>
 ## Create summarised dataframe with a 'drug_list' created from the new_regimen_name
 ## components (this allows for neater merging after the lines have been identified)
 test_df <- cohort_med_flag |> 
-  group_by(patient_upi, new_regimen_name, new_regimen_start_date, new_regimen_latest_date, patient_date_of_death) |>
+  group_by(patient_upi, new_regimen_number, new_regimen_name, new_regimen_start_date, new_regimen_latest_date, patient_date_of_death) |>
   summarise() |> 
   mutate(drug_list = strsplit(trimws(as.character(new_regimen_name)), "\\s*[\\+\\_]\\s*")) |> 
   arrange(patient_upi, new_regimen_start_date) |> 
@@ -271,13 +271,13 @@ test_lines <- test_df |>
 
 final_lines <- test_lines |> 
   group_by(patient_upi, line_of_treatment) |> 
-  summarise(
+  reframe(
+    new_regimen_number = new_regimen_number,
+    new_regimen_name = new_regimen_name,
     line_start_date = min(new_regimen_start_date, na.rm = TRUE),
     last_sact_appt = max(new_regimen_latest_date, na.rm = TRUE),
     date_of_death = first(patient_date_of_death),
-    #combined_drugs = list(unique(list_flatten(drug_list))),
-    combined_drugs = paste(unique(unlist(drug_list)), collapse = "+"),
-    .groups = "drop"
+    combined_regimen_name = paste(unique(unlist(drug_list)), collapse = "+")
   ) |> 
   group_by(patient_upi) |> 
   mutate(next_line_start = lead(line_start_date),
@@ -289,5 +289,6 @@ final_lines <- test_lines |>
            date_of_death,
            na.rm = TRUE)
   ) |> 
-  ungroup()
+  ungroup() |> 
+  select(-c(next_line_start, day_before_next, last_sact_appt))
 
