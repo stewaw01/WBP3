@@ -7,13 +7,12 @@ library(lubridate)
 cohort_start <- as.Date("2024-10-01")
 cohort_end <- as.Date("2025-09-30")
 
-raw_pts <- read_rds("Cohort/Step_01_raw_pts.rds")
+# Load in synthetic data approximating an extract from the National SACT data
+# Only contains fields required by this script
+raw_pts <- read_rds("SyntheticData/Step_01_raw_pts.rds")
 
-n1 <- n_distinct(raw_pts$patient_upi) # 137
+n1 <- n_distinct(raw_pts$patient_upi) # 137 patients
 
-
-raw_pts <- raw_pts |>
-  mutate(patient_upi = consecutive_id(patient_upi))
 
 ## Flag regimen intervals based on gap (if regimen_name differs)
 regimen_intervals <- raw_pts |> 
@@ -153,7 +152,7 @@ cohort_med_flag <- cohort_med_flag |>
 # Line of Treatment pipeline ----
 ## Create summarised dataframe with a 'drug_list' created from the new_regimen_name
 ## components (this allows for neater merging after the lines have been identified)
-test_df <- cohort_med_flag |> 
+df_pre_rules <- cohort_med_flag |> 
   group_by(patient_upi, new_regimen_number, new_regimen_name, new_regimen_start_date, new_regimen_latest_date, patient_date_of_death) |>
   summarise() |> 
   mutate(drug_list = strsplit(trimws(as.character(new_regimen_name)), "\\s*[\\+\\_]\\s*")) |> 
@@ -164,7 +163,7 @@ test_df <- cohort_med_flag |>
 ## List of rules which determine line of treatment groupings as agreed with Rhona
 line_of_treatment_rules <- list(
   
-  rule_28_days <- function(current_line, next_regimen) {
+  rule_28_days_from_start <- function(current_line, next_regimen) {
     
     if (current_line$line_number > 1) return(FALSE)
     
@@ -262,14 +261,17 @@ evaluate_lines_of_treatment <- function(patient_data, rules) {
 }
 
 
-
-test_lines <- test_df |>
+# Apply the "rules engine" function to the prepared dataframe
+df_rules_applied <- df_pre_rules |>
   group_by(patient_upi) |> 
   group_modify(~ evaluate_lines_of_treatment(.x, line_of_treatment_rules)) |> 
   ungroup()
 
 
-final_lines <- test_lines |> 
+# Reformat the data frame to required specification. In the real use case, the
+# line_of_treatment and line_of_treatment_name would be joined onto back onto
+# the main data for later stages of analysis. These steps are omitted.
+final_lines <- df_rules_applied |> 
   group_by(patient_upi, line_of_treatment) |> 
   reframe(
     new_regimen_number = new_regimen_number,
@@ -277,7 +279,7 @@ final_lines <- test_lines |>
     line_start_date = min(new_regimen_start_date, na.rm = TRUE),
     last_sact_appt = max(new_regimen_latest_date, na.rm = TRUE),
     date_of_death = first(patient_date_of_death),
-    combined_regimen_name = paste(unique(unlist(drug_list)), collapse = "+")
+    line_of_treatment_name = paste(unique(unlist(drug_list)), collapse = "+")
   ) |> 
   group_by(patient_upi) |> 
   mutate(next_line_start = lead(line_start_date),
@@ -290,5 +292,5 @@ final_lines <- test_lines |>
            na.rm = TRUE)
   ) |> 
   ungroup() |> 
-  select(-c(next_line_start, day_before_next, last_sact_appt))
+  select(patient_upi, new_regimen_number, new_regimen_name, line_of_treatment, line_of_treatment_name, line_start_date, line_end_date)
 
